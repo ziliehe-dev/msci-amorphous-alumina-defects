@@ -1,0 +1,124 @@
+# ============================================================
+# Quench: Liquid Al2O3 → Amorphous
+# 3000 K → 300 K at 10 K/ps
+# NPT ensemble, Matsui 1994 (converted)
+# ============================================================
+
+variable nsamp equal 10
+variable i loop ${nsamp}
+
+label loop_samples
+clear
+
+# -----------------------------
+# Log file
+# -----------------------------
+log log_quench_sample${i}.txt
+
+# -----------------------------
+# Units & styles
+# -----------------------------
+units           metal
+atom_style      charge
+boundary        p p p
+timestep        0.001     # 1 fs
+
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes
+
+# -----------------------------
+# Read liquid configuration
+# -----------------------------
+read_data liquid_3000K_1000_sample${i}.data
+
+# -----------------------------
+# Masses
+# -----------------------------
+mass 1 26.9815
+mass 2 15.9994
+
+# -----------------------------
+# Charges (Matsui)
+# -----------------------------
+set type 1 charge  1.4175
+set type 2 charge -0.9450
+
+# -----------------------------
+# Potential: Buckingham + Coulomb
+# -----------------------------
+pair_style      buck/coul/long 12.0
+kspace_style    ewald 1.0e-6
+
+pair_coeff  1 1   3.1571e7   0.0680   14.051
+pair_coeff  1 2   2.8477e4   0.1720   34.578
+pair_coeff  2 2   6462.7     0.2760   85.093
+
+# -----------------------------
+# Thermo
+# -----------------------------
+thermo_style custom step temp press vol density pe etotal
+thermo 1000
+
+# ============================================================
+# Step A: Quench 3000 K → 300 K at 10 K/ps
+# Total time: 270 ps (ΔT = 2700 K)
+# ============================================================
+
+fix quench all npt temp 3000.0 300.0 0.1 iso 0.0 0.0 1.0
+run 270000
+unfix quench
+
+# ============================================================
+# Step B: Equilibration at 300 K (NPT)
+# ============================================================
+
+fix eq300 all npt temp 300.0 300.0 0.1 iso 0.0 0.0 1.0
+run 50000   # 50 ps
+unfix eq300
+
+# ============================================================
+# Step C: Sampling at 300 K (RDF + CN + density)
+# ============================================================
+
+reset_timestep 0
+
+# ---------- RDF (time-averaged) ----------
+compute myrdf all rdf 400 1 1 1 2 2 2
+# Same style as your melt sampling:
+# every 10 steps sample, average over 200 samples -> 2000 steps (=2 ps) per block
+fix rdf_out all ave/time 10 200 2000 c_myrdf[*] file rdf_300K_quench_sample${i}.txt mode vector
+
+# ---------- Density time series (for time-average later) ----------
+# output 1 line per 1 ps: Nevery=1000 steps, Nrepeat=1, Nfreq=1000
+variable rho equal density
+fix rho_out all ave/time 1000 1 1000 v_rho file density_300K_quench_sample${i}.txt
+
+# ---------- CN frames ----------
+dump cn_dump all custom 100 cn_frames_quench_sample${i}.lammpstrj id type x y z
+dump_modify cn_dump sort id
+
+# ---------- Sampling run ----------
+fix sample all npt temp 300.0 300.0 0.1 iso 0.0 0.0 1.0
+run 20000   # 20 ps
+unfix sample
+
+# ---------- Cleanup ----------
+unfix rdf_out
+unfix rho_out
+uncompute myrdf
+undump cn_dump
+
+
+# ============================================================
+# Save final quenched structure
+# ============================================================
+
+write_data amorphous_300K_sample${i}.data
+
+# -----------------------------
+# Next sample
+# -----------------------------
+next i
+jump SELF loop_samples
+
+
